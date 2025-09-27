@@ -2,6 +2,12 @@
 
 A sophisticated full-stack application that combines **real-time video background filtering** with **AI-powered subtitle generation**. Originally designed as a technical assessment, this project has evolved into a comprehensive video processing platform with advanced features.
 
+## 🎬 **Live Demo**
+
+**[📺 Watch the Full Demo Video](https://www.loom.com/share/991c480842b44b20aad821d962a23597)**
+
+See all features in action: real-time background filtering, AI subtitle generation, YouTube integration, and more!
+
 ## 🎯 **Core Features**
 
 ### **🎬 Real-time Video Background Filtering**
