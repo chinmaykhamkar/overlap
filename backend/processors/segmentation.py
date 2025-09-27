@@ -31,10 +31,11 @@ class PersonSegmentationProcessor:
             model_selection=model_selection
         )
 
-        # Processing parameters
-        self.blur_kernel_size = 5
-        self.threshold = 0.5
+        # Processing parameters - tuned for better segmentation
+        self.blur_kernel_size = 7  # Increased for smoother edges
+        self.threshold = 0.3  # Lowered to capture more person pixels (including hands)
         self.edge_smoothing = True
+        self.post_process_iterations = 2  # Additional morphological operations
 
         logger.info(f"PersonSegmentationProcessor initialized with model_selection={model_selection}")
 
@@ -81,14 +82,29 @@ class PersonSegmentationProcessor:
             return frame, np.zeros(frame.shape[:2], dtype=np.uint8)
 
     def _smooth_mask_edges(self, mask: np.ndarray) -> np.ndarray:
-        """Apply edge smoothing to the segmentation mask."""
-        # Gaussian blur to smooth edges
-        smooth_mask = cv2.GaussianBlur(mask.astype(np.float32),
-                                     (self.blur_kernel_size, self.blur_kernel_size), 0)
+        """Apply advanced edge smoothing to the segmentation mask."""
+        # Convert to float for better processing
+        smooth_mask = mask.astype(np.float32)
 
-        # Morphological operations to clean up the mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        smooth_mask = cv2.morphologyEx(smooth_mask, cv2.MORPH_CLOSE, kernel)
+        # First pass: Fill small holes in person detection
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        smooth_mask = cv2.morphologyEx(smooth_mask, cv2.MORPH_CLOSE, kernel_close)
+
+        # Second pass: Remove small noise outside person
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        smooth_mask = cv2.morphologyEx(smooth_mask, cv2.MORPH_OPEN, kernel_open)
+
+        # Apply multiple iterations for better results
+        for _ in range(self.post_process_iterations):
+            # Dilate to include more person pixels (helps with hands/arms)
+            kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            smooth_mask = cv2.dilate(smooth_mask, kernel_dilate, iterations=1)
+
+            # Erode to clean up edges
+            smooth_mask = cv2.erode(smooth_mask, kernel_dilate, iterations=1)
+
+        # Final Gaussian blur for smooth transitions
+        smooth_mask = cv2.GaussianBlur(smooth_mask, (self.blur_kernel_size, self.blur_kernel_size), 0)
 
         return smooth_mask
 
@@ -132,7 +148,7 @@ class PersonSegmentationProcessor:
             return np.clip(sepia_frame, 0, 255)
 
         elif filter_type == "blur":
-            return cv2.GaussianBlur(frame, (21, 21), 0)
+            return cv2.GaussianBlur(frame, (51, 51), 0)
 
         elif filter_type == "vintage":
             # Vintage effect: desaturate + warm tint
@@ -147,7 +163,7 @@ class PersonSegmentationProcessor:
             return self._create_filtered_background(frame, "grayscale")
 
     def set_parameters(self, threshold: float = None, blur_kernel_size: int = None,
-                      edge_smoothing: bool = None):
+                      edge_smoothing: bool = None, post_process_iterations: int = None):
         """Update processing parameters."""
         if threshold is not None:
             self.threshold = max(0.0, min(1.0, threshold))
@@ -155,9 +171,12 @@ class PersonSegmentationProcessor:
             self.blur_kernel_size = max(3, blur_kernel_size | 1)  # Ensure odd number
         if edge_smoothing is not None:
             self.edge_smoothing = edge_smoothing
+        if post_process_iterations is not None:
+            self.post_process_iterations = max(0, min(5, post_process_iterations))
 
         logger.info(f"Parameters updated: threshold={self.threshold}, "
-                   f"blur_kernel_size={self.blur_kernel_size}, edge_smoothing={self.edge_smoothing}")
+                   f"blur_kernel_size={self.blur_kernel_size}, edge_smoothing={self.edge_smoothing}, "
+                   f"post_process_iterations={self.post_process_iterations}")
 
     def get_available_filters(self) -> list:
         """Return list of available background filters."""

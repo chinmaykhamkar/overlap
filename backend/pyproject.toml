@@ -14,5 +14,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pillow>=10.0.0",
     "python-socketio>=5.11.0",
-    "eventlet>=0.35.2"
+    "eventlet>=0.35.2",
+    "yt-dlp>=2024.8.6",
+    "openai-whisper>=20231117",
+    "pydub>=0.25.1"
 ]
