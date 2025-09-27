@@ -21,6 +21,8 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const loadingSubtitlesRef = useRef<string | null>(null); // Track which video is being processed
+  const subtitlesLoadingRef = useRef<boolean>(false); // Track loading state without causing re-renders
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [processingEnabled, setProcessingEnabled] = useState(true);
@@ -36,7 +38,7 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
   const [currentCaption, setCurrentCaption] = useState('');
   const [subtitles, setSubtitles] = useState<any[]>([]);
   const [subtitlesLoading, setSubtitlesLoading] = useState(false);
-  const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
+  // Removed currentVideoId state - no longer needed with new subtitle system
   const [showYouTubeInput, setShowYouTubeInput] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [youtubeLoading, setYoutubeLoading] = useState(false);
@@ -161,14 +163,21 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
       setIsPlaying(false);
     }
 
-    // Set new video
+    // Clean up previous video state completely
+    setYoutubeVideoInfo(null); // Clear YouTube info
+    setSubtitles([]); // Clear previous subtitles
+    setCurrentCaption(''); // Clear current caption
+    loadingSubtitlesRef.current = null; // Clear loading reference
+    subtitlesLoadingRef.current = false; // Reset loading state
+    
+    // Set new uploaded video
     setCurrentVideoSrc(videoUrl);
     setUploadedVideoFile(videoFile);
     setShowUpload(false);
     setShowFilterMessage(false);
     setVideoAspectRatio(null); // Reset aspect ratio for new video
-    setCurrentVideoId(null); // Reset video ID for new video
-    setSubtitles([]); // Clear previous subtitles
+    
+    console.log('Video source switched to uploaded file:', videoFile.name);
   }, [isPlaying]);
 
   const handleYouTubeSubmit = useCallback(async () => {
@@ -223,19 +232,25 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
         setIsPlaying(false);
       }
 
+      // Clean up previous video state completely
+      setUploadedVideoFile(null); // Clear uploaded video
+      setSubtitles([]); // Clear previous subtitles
+      setCurrentCaption(''); // Clear current caption
+      loadingSubtitlesRef.current = null; // Clear loading reference
+      subtitlesLoadingRef.current = false; // Reset loading state
+      
+      // Clean up any uploaded video URL
+      if (uploadedVideoFile && currentVideoSrc !== videoSrc) {
+        URL.revokeObjectURL(currentVideoSrc);
+      }
+      
       // Set the downloaded video as current source
       const videoServerUrl = `http://127.0.0.1:8080/youtube/video/${downloadResult.video_id}`;
       setCurrentVideoSrc(videoServerUrl);
       setShowYouTubeInput(false);
       setVideoAspectRatio(null); // Reset aspect ratio for new video
-      setCurrentVideoId(downloadResult.video_id); // Set YouTube video ID
-      setSubtitles([]); // Clear previous subtitles
-
-      // Clean up any uploaded video state
-      if (uploadedVideoFile) {
-        URL.revokeObjectURL(currentVideoSrc);
-        setUploadedVideoFile(null);
-      }
+      
+      console.log('Video source switched to YouTube:', infoResult.info.title);
 
     } catch (error) {
       console.error('Error processing YouTube URL:', error);
@@ -243,14 +258,94 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
     } finally {
       setYoutubeLoading(false);
     }
-  }, [youtubeUrl, isPlaying, uploadedVideoFile, currentVideoSrc]);
+  }, [youtubeUrl, isPlaying, uploadedVideoFile, currentVideoSrc, videoSrc]);
+
+  const loadSubtitles = useCallback(async () => {
+    // Create a unique identifier for the current video source
+    const videoIdentifier = youtubeVideoInfo?.id || 
+                           (uploadedVideoFile ? `upload_${uploadedVideoFile.name}_${uploadedVideoFile.size}` : currentVideoSrc);
+    
+    // Prevent duplicate requests for the same video
+    if (subtitlesLoadingRef.current || loadingSubtitlesRef.current === videoIdentifier) {
+      console.log('Subtitles already loading for this video, skipping...');
+      return;
+    }
+
+    loadingSubtitlesRef.current = videoIdentifier;
+    subtitlesLoadingRef.current = true;
+    setSubtitlesLoading(true);
+    
+    try {
+      let response;
+      let videoSource = '';
+      
+      // Determine video source and call appropriate endpoint
+      if (youtubeVideoInfo) {
+        // YouTube video
+        videoSource = 'YouTube';
+        console.log('Loading subtitles for YouTube video:', youtubeVideoInfo.id);
+        
+        response = await fetch('http://127.0.0.1:8080/subtitles/process/youtube', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ video_id: youtubeVideoInfo.id }),
+        });
+        
+      } else if (uploadedVideoFile) {
+        // Uploaded video file
+        videoSource = 'uploaded';
+        console.log('Processing subtitles for uploaded video:', uploadedVideoFile.name);
+        
+        const formData = new FormData();
+        formData.append('video', uploadedVideoFile);
+
+        response = await fetch('http://127.0.0.1:8080/subtitles/process/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        
+      } else {
+        // Default video (remote URL)
+        videoSource = 'default';
+        console.log('Processing subtitles for default video:', currentVideoSrc);
+        
+        response = await fetch('http://127.0.0.1:8080/subtitles/process/remote', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ video_url: currentVideoSrc }),
+        });
+      }
+
+      if (response.ok) {
+        const data = await response.json();
+        setSubtitles(data.subtitles || []);
+        console.log(`Loaded ${data.subtitles?.length || 0} subtitle segments for ${videoSource} video (ID: ${data.video_id})`);
+      } else {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error(`Failed to load subtitles for ${videoSource} video:`, errorData.error);
+        setSubtitles([]);
+      }
+      
+    } catch (error) {
+      console.error('Error loading subtitles:', error);
+      setSubtitles([]);
+    } finally {
+      subtitlesLoadingRef.current = false;
+      setSubtitlesLoading(false);
+      loadingSubtitlesRef.current = null; // Clear the loading reference
+    }
+  }, [youtubeVideoInfo, uploadedVideoFile, currentVideoSrc]);
 
   // Load subtitles when video source changes
   useEffect(() => {
     if (captionsEnabled && currentVideoSrc) {
       loadSubtitles();
     }
-  }, [currentVideoSrc, captionsEnabled]);
+  }, [currentVideoSrc, captionsEnabled, loadSubtitles]);
 
   // Update current caption based on video time
   useEffect(() => {
@@ -277,66 +372,6 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
     };
   }, [captionsEnabled, subtitles]);
 
-  const loadSubtitles = async () => {
-    if (subtitlesLoading) return;
-
-    setSubtitlesLoading(true);
-    try {
-      let videoId = currentVideoId;
-
-      // If we don't have a video ID yet, determine video source type
-      if (!videoId) {
-        if (youtubeVideoInfo) {
-          videoId = youtubeVideoInfo.id;
-          setCurrentVideoId(videoId);
-        } else if (uploadedVideoFile) {
-          // For uploaded videos, we'll need to upload and process
-          const formData = new FormData();
-          formData.append('video', uploadedVideoFile);
-
-          const uploadResponse = await fetch('http://127.0.0.1:8080/subtitles/upload', {
-            method: 'POST',
-            body: formData,
-          });
-
-          if (uploadResponse.ok) {
-            const result = await uploadResponse.json();
-            videoId = result.video_id;
-            setCurrentVideoId(videoId);
-            console.log('Video uploaded for subtitles, ID:', videoId);
-          } else {
-            console.error('Failed to upload video for subtitles');
-            setSubtitles([]);
-            return;
-          }
-        }
-      }
-
-      if (videoId) {
-        console.log('Loading subtitles for video ID:', videoId);
-        // Get subtitles from backend
-        const response = await fetch(`http://127.0.0.1:8080/subtitles/${videoId}`);
-
-        if (response.ok) {
-          const data = await response.json();
-          setSubtitles(data.subtitles || []);
-          console.log('Loaded subtitles:', data.subtitles?.length || 0, 'segments');
-        } else {
-          console.error('Failed to load subtitles, status:', response.status);
-          setSubtitles([]);
-        }
-      } else {
-        console.log('No video ID available for subtitle loading');
-        setSubtitles([]);
-      }
-    } catch (error) {
-      console.error('Error loading subtitles:', error);
-      setSubtitles([]);
-    } finally {
-      setSubtitlesLoading(false);
-    }
-  };
-
   const handleBackToDefault = useCallback(() => {
     // Stop current playback
     if (isPlaying) {
@@ -355,14 +390,20 @@ const VideoProcessor: React.FC<VideoProcessorProps> = ({ videoSrc }) => {
       URL.revokeObjectURL(currentVideoSrc);
     }
 
-    // Reset to default
-    setCurrentVideoSrc(videoSrc);
+    // Clean up all video state completely
     setUploadedVideoFile(null);
     setYoutubeVideoInfo(null);
+    setSubtitles([]); // Clear subtitles
+    setCurrentCaption(''); // Clear current caption
     setShowFilterMessage(false);
     setVideoAspectRatio(null); // Reset aspect ratio
-    setCurrentVideoId(null); // Reset video ID
-    setSubtitles([]); // Clear subtitles
+    loadingSubtitlesRef.current = null; // Clear loading reference
+    subtitlesLoadingRef.current = false; // Reset loading state
+    
+    // Reset to default video
+    setCurrentVideoSrc(videoSrc);
+    
+    console.log('Video source switched back to default video');
   }, [isPlaying, uploadedVideoFile, currentVideoSrc, videoSrc]);
 
   useEffect(() => {

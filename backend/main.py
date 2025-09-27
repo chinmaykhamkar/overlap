@@ -202,96 +202,121 @@ def serve_youtube_video(video_id):
         logger.error(f"Error serving YouTube video {video_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/subtitles/upload", methods=["POST"])
-def upload_video_for_subtitles():
-    """Upload video file and process subtitles."""
+@app.route("/subtitles/process/upload", methods=["POST"])
+def process_subtitles_upload():
+    """Process subtitles for uploaded video file."""
     try:
         if 'video' not in request.files:
             return jsonify({"error": "No video file provided"}), 400
-
+        
         video_file = request.files['video']
         if video_file.filename == '':
             return jsonify({"error": "No video file selected"}), 400
 
         logger.info(f"Processing subtitles for uploaded video: {video_file.filename}")
-
-        # Save the uploaded video
-        video_path = subtitle_processor.save_uploaded_video(video_file)
-
-        # Generate video ID
-        video_id = subtitle_processor.get_video_id_from_path(video_path)
-
-        # Process subtitles in background (could be made async for better UX)
-        subtitles = subtitle_processor.process_video_subtitles(video_path)
+        
+        # Generate unique video ID based on file content and timestamp
+        import time
+        import hashlib
+        
+        # Create unique ID from filename + timestamp
+        file_content = f"{video_file.filename}_{int(time.time() * 1000)}"
+        video_id = hashlib.sha256(file_content.encode()).hexdigest()[:16]
+        
+        # Save the uploaded video with unique name
+        video_path = subtitle_processor.save_uploaded_video_with_id(video_file, video_id)
+        
+        # Process subtitles (always fresh, no caching)
+        subtitles = subtitle_processor.process_video_subtitles_no_cache(video_path)
 
         return jsonify({
             "success": True,
             "video_id": video_id,
+            "video_source": "upload",
             "subtitle_count": len(subtitles),
-            "message": "Video uploaded and subtitles processed successfully"
+            "subtitles": subtitles,
+            "message": "Subtitles processed successfully for uploaded video"
         }), 200
 
     except Exception as e:
-        logger.error(f"Upload video for subtitles error: {e}")
+        logger.error(f"Process upload subtitles error: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/subtitles/<video_id>", methods=["GET"])
-def get_video_subtitles(video_id):
-    """Get subtitles for a video by ID."""
+@app.route("/subtitles/process/youtube", methods=["POST"])
+def process_subtitles_youtube():
+    """Process subtitles for YouTube video."""
     try:
-        logger.info(f"Getting subtitles for video: {video_id}")
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
 
-        # Check if this is a YouTube video
+        video_id = data.get('video_id')
+        if not video_id:
+            return jsonify({"error": "No YouTube video ID provided"}), 400
+            
+        logger.info(f"Processing subtitles for YouTube video: {video_id}")
+        
+        # Find YouTube video file
         youtube_video_files = list(youtube_processor.temp_dir.glob(f"{video_id}.*"))
-        if youtube_video_files:
-            video_path = str(youtube_video_files[0])
-            logger.info(f"Processing YouTube video: {video_path}")
-        else:
-            # Check for uploaded video - try different patterns
-            video_files = []
-
-            # Try exact match first
-            exact_matches = list(subtitle_processor.temp_dir.glob(f"*{video_id}*"))
-            video_files.extend([f for f in exact_matches if not f.name.endswith(('.json', '.wav'))])
-
-            # If no exact match, try partial match (in case ID generation differs)
-            if not video_files:
-                all_videos = list(subtitle_processor.temp_dir.glob("upload_*"))
-                video_files = [f for f in all_videos if not f.name.endswith(('.json', '.wav'))]
-
-                # Log available files for debugging
-                logger.info(f"Available video files: {[f.name for f in video_files]}")
-
-            if not video_files:
-                return jsonify({"error": "Video not found"}), 404
-
-            video_path = str(video_files[0])
-            logger.info(f"Using video file: {video_path}")
-
-        # Check for cached subtitles first
-        cached_subtitles = subtitle_processor.get_cached_subtitles(video_id)
-        if cached_subtitles:
-            logger.info(f"Returning cached subtitles for {video_id}")
-            return jsonify({
-                "success": True,
-                "video_id": video_id,
-                "subtitles": cached_subtitles,
-                "cached": True
-            }), 200
-
-        # Process subtitles
-        subtitles = subtitle_processor.process_video_subtitles(video_path)
+        if not youtube_video_files:
+            return jsonify({"error": f"YouTube video file not found for ID: {video_id}"}), 404
+            
+        video_path = str(youtube_video_files[0])
+        
+        # Process subtitles (always fresh, no caching)
+        subtitles = subtitle_processor.process_video_subtitles_no_cache(video_path)
 
         return jsonify({
             "success": True,
             "video_id": video_id,
+            "video_source": "youtube",
+            "subtitle_count": len(subtitles),
             "subtitles": subtitles,
-            "cached": False
+            "message": "Subtitles processed successfully for YouTube video"
         }), 200
 
     except Exception as e:
-        logger.error(f"Get subtitles error for {video_id}: {e}")
+        logger.error(f"Process YouTube subtitles error: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route("/subtitles/process/remote", methods=["POST"])
+def process_subtitles_remote():
+    """Process subtitles for remote video URL."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        video_url = data.get('video_url')
+        if not video_url:
+            return jsonify({"error": "No video URL provided"}), 400
+            
+        logger.info(f"Processing subtitles for remote URL: {video_url}")
+        
+        # Generate unique ID from URL
+        import hashlib
+        video_id = hashlib.sha256(video_url.encode()).hexdigest()[:16]
+        
+        # Download remote video temporarily for processing
+        video_path = subtitle_processor.download_remote_video(video_url, video_id)
+        
+        # Process subtitles (always fresh, no caching)
+        subtitles = subtitle_processor.process_video_subtitles_no_cache(video_path)
+
+        return jsonify({
+            "success": True,
+            "video_id": video_id,
+            "video_source": "remote_url",
+            "subtitle_count": len(subtitles),
+            "subtitles": subtitles,
+            "message": "Subtitles processed successfully for remote video"
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Process remote subtitles error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Removed old problematic subtitle endpoint - replaced with /subtitles/process
 
 
 @socketio.on('connect')

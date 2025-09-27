@@ -120,9 +120,9 @@ class SubtitleProcessor:
             logger.error(f"Failed to transcribe audio {audio_path}: {e}")
             raise
 
-    def process_video_subtitles(self, video_path: str) -> List[Dict[str, Any]]:
+    def process_video_subtitles_no_cache(self, video_path: str) -> List[Dict[str, Any]]:
         """
-        Extract subtitles from video file.
+        Extract subtitles from video file without caching (always fresh processing).
 
         Args:
             video_path: Path to video file
@@ -131,14 +131,7 @@ class SubtitleProcessor:
             List of subtitle segments
         """
         try:
-            # Check if subtitles already cached
-            video_hash = hashlib.md5(video_path.encode()).hexdigest()[:8]
-            subtitles_cache_path = self.temp_dir / f"{video_hash}_subtitles.json"
-
-            if subtitles_cache_path.exists():
-                logger.info(f"Using cached subtitles: {subtitles_cache_path}")
-                with open(subtitles_cache_path, 'r') as f:
-                    return json.load(f)
+            logger.info(f"Processing subtitles for video: {video_path}")
 
             # Extract audio from video
             audio_path = self.extract_audio_from_video(video_path)
@@ -146,25 +139,62 @@ class SubtitleProcessor:
             # Transcribe audio to subtitles
             subtitles = self.transcribe_audio(audio_path)
 
-            # Cache subtitles
-            with open(subtitles_cache_path, 'w') as f:
-                json.dump(subtitles, f, indent=2)
-
-            logger.info(f"Subtitles cached to: {subtitles_cache_path}")
-
+            logger.info(f"Generated {len(subtitles)} subtitle segments for {video_path}")
             return subtitles
 
         except Exception as e:
             logger.error(f"Failed to process subtitles for {video_path}: {e}")
             return []
 
+    def process_video_subtitles(self, video_path: str) -> List[Dict[str, Any]]:
+        """
+        Extract subtitles from video file (legacy method - kept for compatibility).
+        Now calls the no-cache version for consistency.
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            List of subtitle segments
+        """
+        return self.process_video_subtitles_no_cache(video_path)
+
     def get_video_id_from_path(self, video_path: str) -> str:
         """Generate a unique ID for video based on file path."""
         return hashlib.md5(video_path.encode()).hexdigest()[:12]
 
+    def save_uploaded_video_with_id(self, video_file, video_id: str) -> str:
+        """
+        Save uploaded video file with specific ID and return path.
+
+        Args:
+            video_file: Uploaded file object
+            video_id: Unique video identifier
+
+        Returns:
+            Path to saved video file
+        """
+        try:
+            # Generate filename with provided ID
+            original_filename = getattr(video_file, 'filename', 'uploaded_video')
+            file_ext = Path(original_filename).suffix or '.mp4'
+            video_filename = f"upload_{video_id}{file_ext}"
+
+            video_path = self.temp_dir / video_filename
+
+            # Save video file
+            video_file.save(str(video_path))
+
+            logger.info(f"Video saved to: {video_path} with ID: {video_id}")
+            return str(video_path)
+
+        except Exception as e:
+            logger.error(f"Failed to save uploaded video with ID {video_id}: {e}")
+            raise
+
     def save_uploaded_video(self, video_file) -> str:
         """
-        Save uploaded video file and return path.
+        Save uploaded video file and return path (legacy method).
 
         Args:
             video_file: Uploaded file object
@@ -189,6 +219,52 @@ class SubtitleProcessor:
 
         except Exception as e:
             logger.error(f"Failed to save uploaded video: {e}")
+            raise
+
+    def download_remote_video(self, video_url: str, video_id: str) -> str:
+        """
+        Download remote video URL temporarily for subtitle processing.
+
+        Args:
+            video_url: Remote video URL
+            video_id: Unique video identifier
+
+        Returns:
+            Path to downloaded video file
+        """
+        try:
+            import requests
+            from urllib.parse import urlparse
+
+            logger.info(f"Downloading remote video: {video_url}")
+
+            # Parse URL to get file extension
+            parsed_url = urlparse(video_url)
+            file_ext = Path(parsed_url.path).suffix or '.mp4'
+            
+            # Create filename with video ID
+            video_filename = f"remote_{video_id}{file_ext}"
+            video_path = self.temp_dir / video_filename
+
+            # Check if already downloaded
+            if video_path.exists() and video_path.stat().st_size > 0:
+                logger.info(f"Using cached remote video: {video_path}")
+                return str(video_path)
+
+            # Download the video
+            response = requests.get(video_url, stream=True, timeout=30)
+            response.raise_for_status()
+
+            # Save video file
+            with open(video_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            logger.info(f"Remote video downloaded to: {video_path}")
+            return str(video_path)
+
+        except Exception as e:
+            logger.error(f"Failed to download remote video {video_url}: {e}")
             raise
 
     def cleanup_old_files(self, max_age_hours: int = 24):

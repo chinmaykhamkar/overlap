@@ -1827,6 +1827,7 @@ dependencies = [
     { name = "pydub" },
     { name = "python-dotenv" },
     { name = "python-socketio" },
+    { name = "requests" },
     { name = "yt-dlp" },
 ]
 
@@ -1844,6 +1845,7 @@ requires-dist = [
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-socketio", specifier = ">=5.11.0" },
+    { name = "requests", specifier = ">=2.31.0" },
     { name = "yt-dlp", specifier = ">=2024.8.6" },
 ]
 
