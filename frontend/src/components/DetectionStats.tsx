@@ -1,5 +1,5 @@
 import React from 'react';
-import { FaceDetection } from '../App';
+import { FaceDetection } from '../types';
 
 interface DetectionStatsProps {
   detections: FaceDetection[];
